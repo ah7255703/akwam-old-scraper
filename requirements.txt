@@ -1,3 +1,2 @@
 aiohttp
 bs4
-fire

@@ -1,68 +1,66 @@
+# coding=utf-8
 import json
 import time
-from uuid import uuid4
-
 import aiohttp
 from bs4 import BeautifulSoup
-from fire import Fire
+import sys
+import asyncio
 
 
-class AkwamOld(object):
+async def __validate(url:str)-> bool:
     DOMAIN = 'akwam'
+    if DOMAIN not in url:
+        return False
+    return True
 
-    async def __validate(self,url:str)-> bool:
-        if self.DOMAIN not in url:
-            return False
-        return True
+async def __soup(data:str,parser='html.parser'):
+    soup = BeautifulSoup(data,parser)
+    return soup
 
-    async def __soup(self,data:str,parser='html.parser'):
-        soup = BeautifulSoup(data,parser)
-        return soup
+async def __get_epis(page_soup:BeautifulSoup):
+    epis = page_soup.find_all('div',class_='direct_link_box')
+    return epis
 
-    async def __get_epis(self,page_soup:BeautifulSoup):
-        epis = page_soup.find_all('div',class_='direct_link_box')
-        return epis
+async def __parse_each_epi(soup:BeautifulSoup):
+    # we will get one
+    link = soup.find('a',class_="download_btn")
+    return link.get('href')  # type: ignore
 
-    async def __parse_each_epi(self,soup:BeautifulSoup):
-        # we will get one
-        link = soup.find('a',class_="download_btn")
-        return link.get('href')  # type: ignore
-
-    async def __get_id_links(self,url:str):
-        '''this will get indirect download links'''
-        if not await self.__validate(url):
-            raise Exception('This is not valid akwam url')
-        async with aiohttp.ClientSession() as session:
-            response =await session.get(url)
-            data = await response.text('utf-8')
-        soup = await self.__soup(data)
-        items_mcp =await self.__get_epis(soup)
-        links = [await self.__parse_each_epi(mcp) for mcp in items_mcp ]
-        return links
+async def __get_id_links(url:str,session):
+    '''this will get indirect download links'''
+    if not await __validate(url):
+        raise Exception('This is not valid akwam url')
     
-    async def __get_direct_link(self,ind_link) -> str:
-        async with aiohttp.ClientSession() as session:
-            headers = {
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Referer": ind_link}
-            response =await session.post(ind_link,headers=headers)
+    async with session.get(url) as response:
+        data = await response.text('utf-8')
+        soup = await __soup(data)
+    items_mcp =await __get_epis(soup)
+    links = [await __parse_each_epi(mcp) for mcp in items_mcp ]
+    return links
+
+async def __get_direct_link(ind_link,session) -> str:
+    headers = {"X-Requested-With": "XMLHttpRequest","Referer": ind_link}
+    async with  session.post(ind_link,headers=headers) as response:
         _data = await response.text('utf-8')
-        _link:dict = json.loads(_data).get('direct_link')
-        return str(_link).strip()
-    
-    async def get(self,url:str,tojson=False):
-        id_links = await self.__get_id_links(url)
-        d_links = [await self.__get_direct_link(l) for l in id_links]  # type: ignore
-        if tojson:
-            f_name = uuid4()
-            with open(f'{f_name}.json','w') as file:
-                json.dump(d_links,file)
-                print(f'[*] saved to {f_name}')
-        return d_links
+    _link:dict = json.loads(_data).get('direct_link')
+    return str(_link).strip()
 
+async def get(url:str,session):
+    id_links = await __get_id_links(url,session)
+    # d_links = [await (__get_direct_link(link,session)) for link in id_links]
+    tasks = [asyncio.create_task(__get_direct_link(link,session)) for link in id_links]
+    _d_links = asyncio.gather(*tasks)
+    d_links = await _d_links
+    return d_links
 
-if __name__ == '__main__':
+async def main():
+    url = sys.argv[1]
     t1 = time.time()
-    Fire(AkwamOld)
-    total:float = time.time() - t1
-    print(f'[*] Done in: {total} seconds' )
+    async with aiohttp.ClientSession() as session:
+        data = await get(url,session)
+    print(data)
+    t2 = time.time()
+    print('Done in {} seconds'.format(t2-t1))
+if __name__ == '__main__':
+    asyncio.run(main())
+    
